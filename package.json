@@ -1,10 +1,8 @@
 {
   "name": "project-nexus-backend",
   "private": true,
-  "type": "module",
   "version": "1.0.0",
-  "description": "Vercel serverless backend for Project Nexus (calls OpenAI).",
-  "scripts": {
-    "start": "node -e \"console.log('Deploy on Vercel. No local server needed.')\""
+  "engines": {
+    "node": "20.x"
   }
 }
