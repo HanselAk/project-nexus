@@ -1,4 +1,4 @@
-# Project Nexus Backend (Vercel)
+# Project Nexus Backend (Netlify)
 
 This is a tiny serverless backend that exposes:
 
