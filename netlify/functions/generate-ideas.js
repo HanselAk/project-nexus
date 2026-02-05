@@ -4,7 +4,7 @@ const OPENAI_URL = "https://api.openai.com/v1/responses";
 
 // Netlify Functions often time out if the upstream call is slow.
 // We'll enforce our own timeout so we can return JSON instead of Netlify returning HTML.
-const UPSTREAM_TIMEOUT_MS = 9000; // 9s (stay under Netlify kill window)
+const UPSTREAM_TIMEOUT_MS = 8000; // 8s (stay under Netlify kill window)
 
 function json(statusCode, body) {
   return {
@@ -86,8 +86,8 @@ exports.handler = async (event) => {
         },
       ],
       // Lower output = faster = fewer Netlify timeouts
-      max_output_tokens: 900,
-      temperature: 0.8,
+      max_output_tokens: 450,
+      temperature: 0.7,
     };
 
     // Enforced timeout
