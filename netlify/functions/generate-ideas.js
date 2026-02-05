@@ -1,194 +1,145 @@
 // netlify/functions/generate-ideas.js
-// Netlify serverless function: /.netlify/functions/generate-ideas
-//
-// Expects JSON body: { model: string, prompt: string }
-// Returns: { ideasText: string, modelUsed: string }
 
 const OPENAI_URL = "https://api.openai.com/v1/responses";
 
-// If your HTML dropdown contains older/legacy model names, map them to modern equivalents.
-// You can expand this mapping as needed.
-function normalizeModel(model) {
-  const m = (model || "").trim();
+// Netlify Functions often time out if the upstream call is slow.
+// We'll enforce our own timeout so we can return JSON instead of Netlify returning HTML.
+const UPSTREAM_TIMEOUT_MS = 9000; // 9s (stay under Netlify kill window)
 
-  const map = {
-    // common legacy picks from older templates
-    "gpt-4": "gpt-4.1",
-    "gpt-4-turbo": "gpt-4.1",
-    "gpt-4-turbo-preview": "gpt-4.1-mini",
-    "gpt-3.5-turbo": "gpt-4o-mini",
-    "gpt-3.5-turbo-16k": "gpt-4o-mini",
-
-    // if you already use these, keep them
-    "gpt-4.1": "gpt-4.1",
-    "gpt-4.1-mini": "gpt-4.1-mini",
-    "gpt-4o-mini": "gpt-4o-mini",
-    "gpt-4o": "gpt-4o",
-  };
-
-  return map[m] || m || "gpt-4.1-mini";
-}
-
-function getApiKey() {
-  // Support multiple env var names (since you previously mentioned openai_api_key)
-  return (
-    process.env.OPENAI_API_KEY ||
-    process.env.openai_api_key ||
-    process.env.OPENAI_APIKEY ||
-    ""
-  ).trim();
-}
-
-function json(statusCode, obj) {
+function json(statusCode, body) {
   return {
     statusCode,
     headers: {
-      "Content-Type": "application/json",
-      // If you ever call this function cross-origin, these help.
+      "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
     },
-    body: JSON.stringify(obj),
+    body: JSON.stringify(body),
   };
 }
 
-function extractResponseText(responsesPayload) {
-  // Responses API returns an `output` array with items that contain `content`.
-  // We’ll collect any text chunks we can find.
-  const out = responsesPayload?.output;
-  if (!Array.isArray(out)) return "";
-
-  let text = "";
-  for (const item of out) {
-    const content = item?.content;
-    if (!Array.isArray(content)) continue;
-    for (const c of content) {
-      if (c?.type === "output_text" && typeof c.text === "string") {
-        text += c.text;
-      } else if (typeof c?.text === "string") {
-        // fallback, just in case schema changes slightly
-        text += c.text;
+function extractResponseText(data) {
+  // Responses API usually returns text in output[].content[]
+  try {
+    if (data?.output?.length) {
+      const chunks = [];
+      for (const item of data.output) {
+        const content = item?.content || [];
+        for (const c of content) {
+          if (c?.type === "output_text" && typeof c?.text === "string") chunks.push(c.text);
+        }
       }
+      return chunks.join("\n").trim();
     }
-  }
-  return text.trim();
+  } catch {}
+  // fallback
+  if (typeof data?.output_text === "string") return data.output_text.trim();
+  return "";
 }
 
 exports.handler = async (event) => {
-  // Handle preflight
-  if (event.httpMethod === "OPTIONS") {
-    return {
-      statusCode: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-      },
-      body: "",
-    };
-  }
+  // CORS preflight
+  if (event.httpMethod === "OPTIONS") return json(200, { ok: true });
 
   if (event.httpMethod !== "POST") {
-    return json(405, { error: { message: "Method Not Allowed. Use POST." } });
+    return json(405, { error: { message: "Method not allowed. Use POST." } });
   }
-
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    return json(500, {
-      error: {
-        message:
-          "Missing OpenAI API key. Set environment variable OPENAI_API_KEY (recommended) or openai_api_key in Netlify.",
-      },
-    });
-  }
-
-  let body;
-  try {
-    body = JSON.parse(event.body || "{}");
-  } catch {
-    return json(400, { error: { message: "Invalid JSON body." } });
-  }
-
-  const modelRequested = body.model;
-  const model = normalizeModel(modelRequested);
-  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
-
-  if (!prompt) {
-    return json(400, { error: { message: "Missing prompt." } });
-  }
-
-  // Strongly encourage markdown-ish structure so your frontend parser can extract sections.
-  // Your displayResults() looks for **Title**, **Problem**, **Key Features**, **Technology Stack**, etc.
-  const systemStyle = `
-You generate structured project ideas in a consistent format.
-Rules:
-- Output exactly the requested number of ideas.
-- For each idea, ALWAYS include these headings exactly as written:
-  **Title**
-  **Tagline**
-  **Problem**
-  **Solution**
-  **Target Users**
-  **Key Features**
-  **Technology Stack**
-  **Feasibility**
-- If the user prompt asks for extras (roadmap, risks, etc.), include them too.
-- Keep each section clear and not overly long.
-- Use plain text and bullet lists where appropriate.
-`.trim();
 
   try {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return json(500, {
+        error: { message: "API key not configured. Set OPENAI_API_KEY in Netlify environment variables." },
+      });
+    }
+
+    let body;
+    try {
+      body = JSON.parse(event.body || "{}");
+    } catch {
+      return json(400, { error: { message: "Invalid JSON body." } });
+    }
+
+    // Your frontend sends: { model, prompt }
+    const model = body.model || "gpt-4.1-mini";
+
+    // IMPORTANT: keep prompt size under control (huge prompts slow responses)
+    let prompt = String(body.prompt || "").trim();
+    if (!prompt) return json(400, { error: { message: "Missing prompt." } });
+
+    // Hard cap prompt length to avoid timeouts (you can adjust if needed)
+    if (prompt.length > 12000) prompt = prompt.slice(0, 12000);
+
+    // IMPORTANT: keep output tokens lower so it finishes before Netlify times out
     const payload = {
       model,
       input: [
         {
           role: "system",
-          content: [{ type: "input_text", text: systemStyle }],
+          content:
+            "You are an expert senior-design project advisor. Return concise, compact project ideas. Use clear headings and short bullet points.",
         },
         {
           role: "user",
           content: [{ type: "input_text", text: prompt }],
         },
       ],
-      // Keep output reasonable (Netlify functions can time out if this is huge)
-      max_output_tokens: 2500,
+      // Lower output = faster = fewer Netlify timeouts
+      max_output_tokens: 900,
+      temperature: 0.8,
     };
 
-    const resp = await fetch(OPENAI_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
+    // Enforced timeout
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
-    const data = await resp.json();
+    let resp;
+    try {
+      resp = await fetch(OPENAI_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    // If OpenAI returns non-JSON for any reason, guard it:
+    const text = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return json(502, {
+        error: {
+          message: `Upstream returned non-JSON (status ${resp.status}).`,
+          details: text.slice(0, 300),
+        },
+      });
+    }
 
     if (!resp.ok) {
-      const msg =
-        data?.error?.message ||
-        data?.message ||
-        `OpenAI API error (${resp.status})`;
+      const msg = data?.error?.message || data?.message || `OpenAI API error (${resp.status})`;
       return json(resp.status, { error: { message: msg, details: data } });
     }
 
     const ideasText = extractResponseText(data);
     if (!ideasText) {
-      return json(500, {
-        error: {
-          message:
-            "OpenAI returned an empty response. Try again, or reduce requested detail/idea count.",
-          details: data,
-        },
-      });
+      return json(500, { error: { message: "OpenAI returned empty text.", details: data } });
     }
 
     return json(200, { ideasText, modelUsed: model });
   } catch (err) {
-    return json(500, {
-      error: { message: err?.message || "Server error." },
-    });
+    // If we aborted, return a clean JSON error (instead of Netlify HTML timeout)
+    const msg =
+      err?.name === "AbortError"
+        ? "Upstream timed out. Reduce idea count/detail level and try again."
+        : err?.message || "Server error";
+    return json(504, { error: { message: msg } });
   }
 };
