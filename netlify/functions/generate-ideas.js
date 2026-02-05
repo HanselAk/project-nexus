@@ -1,164 +1,194 @@
 // netlify/functions/generate-ideas.js
-export async function handler(event) {
-  // Basic CORS (safe default)
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
+// Netlify serverless function: /.netlify/functions/generate-ideas
+//
+// Expects JSON body: { model: string, prompt: string }
+// Returns: { ideasText: string, modelUsed: string }
+
+const OPENAI_URL = "https://api.openai.com/v1/responses";
+
+// If your HTML dropdown contains older/legacy model names, map them to modern equivalents.
+// You can expand this mapping as needed.
+function normalizeModel(model) {
+  const m = (model || "").trim();
+
+  const map = {
+    // common legacy picks from older templates
+    "gpt-4": "gpt-4.1",
+    "gpt-4-turbo": "gpt-4.1",
+    "gpt-4-turbo-preview": "gpt-4.1-mini",
+    "gpt-3.5-turbo": "gpt-4o-mini",
+    "gpt-3.5-turbo-16k": "gpt-4o-mini",
+
+    // if you already use these, keep them
+    "gpt-4.1": "gpt-4.1",
+    "gpt-4.1-mini": "gpt-4.1-mini",
+    "gpt-4o-mini": "gpt-4o-mini",
+    "gpt-4o": "gpt-4o",
   };
 
+  return map[m] || m || "gpt-4.1-mini";
+}
+
+function getApiKey() {
+  // Support multiple env var names (since you previously mentioned openai_api_key)
+  return (
+    process.env.OPENAI_API_KEY ||
+    process.env.openai_api_key ||
+    process.env.OPENAI_APIKEY ||
+    ""
+  ).trim();
+}
+
+function json(statusCode, obj) {
+  return {
+    statusCode,
+    headers: {
+      "Content-Type": "application/json",
+      // If you ever call this function cross-origin, these help.
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+    },
+    body: JSON.stringify(obj),
+  };
+}
+
+function extractResponseText(responsesPayload) {
+  // Responses API returns an `output` array with items that contain `content`.
+  // We’ll collect any text chunks we can find.
+  const out = responsesPayload?.output;
+  if (!Array.isArray(out)) return "";
+
+  let text = "";
+  for (const item of out) {
+    const content = item?.content;
+    if (!Array.isArray(content)) continue;
+    for (const c of content) {
+      if (c?.type === "output_text" && typeof c.text === "string") {
+        text += c.text;
+      } else if (typeof c?.text === "string") {
+        // fallback, just in case schema changes slightly
+        text += c.text;
+      }
+    }
+  }
+  return text.trim();
+}
+
+exports.handler = async (event) => {
+  // Handle preflight
   if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 200, headers: corsHeaders, body: "" };
+    return {
+      statusCode: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+      },
+      body: "",
+    };
   }
 
   if (event.httpMethod !== "POST") {
-    return {
-      statusCode: 405,
-      headers: corsHeaders,
-      body: JSON.stringify({ error: { message: "Method not allowed" } }),
-    };
+    return json(405, { error: { message: "Method Not Allowed. Use POST." } });
   }
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    return json(500, {
+      error: {
+        message:
+          "Missing OpenAI API key. Set environment variable OPENAI_API_KEY (recommended) or openai_api_key in Netlify.",
+      },
+    });
+  }
+
+  let body;
+  try {
+    body = JSON.parse(event.body || "{}");
+  } catch {
+    return json(400, { error: { message: "Invalid JSON body." } });
+  }
+
+  const modelRequested = body.model;
+  const model = normalizeModel(modelRequested);
+  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+
+  if (!prompt) {
+    return json(400, { error: { message: "Missing prompt." } });
+  }
+
+  // Strongly encourage markdown-ish structure so your frontend parser can extract sections.
+  // Your displayResults() looks for **Title**, **Problem**, **Key Features**, **Technology Stack**, etc.
+  const systemStyle = `
+You generate structured project ideas in a consistent format.
+Rules:
+- Output exactly the requested number of ideas.
+- For each idea, ALWAYS include these headings exactly as written:
+  **Title**
+  **Tagline**
+  **Problem**
+  **Solution**
+  **Target Users**
+  **Key Features**
+  **Technology Stack**
+  **Feasibility**
+- If the user prompt asks for extras (roadmap, risks, etc.), include them too.
+- Keep each section clear and not overly long.
+- Use plain text and bullet lists where appropriate.
+`.trim();
 
   try {
-    const body = JSON.parse(event.body || "{}");
+    const payload = {
+      model,
+      input: [
+        {
+          role: "system",
+          content: [{ type: "input_text", text: systemStyle }],
+        },
+        {
+          role: "user",
+          content: [{ type: "input_text", text: prompt }],
+        },
+      ],
+      // Keep output reasonable (Netlify functions can time out if this is huge)
+      max_output_tokens: 2500,
+    };
 
-    const model = body.model || "gpt-4.1-mini";
-    const prompt = body.prompt || "";
-    const count = Number(body.count || 3);
-    const detailLevel = body.detailLevel || "moderate";
-    const includeExtras = Boolean(body.includeExtras ?? true);
-
-    // Accept either env var name
-    const apiKey = process.env.OPENAI_API_KEY || process.env.openai_api_key;
-
-    if (!apiKey) {
-      return {
-        statusCode: 500,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          error: {
-            message:
-              "Missing API key on Netlify. Set OPENAI_API_KEY (recommended) or openai_api_key in Site settings → Environment variables.",
-          },
-        }),
-      };
-    }
-
-    // We want COMPACT output like your professor’s cards:
-    // Description, Est. Cost, Timeline, Key Components, Technologies, Challenges, Market Appeal, Unique Value
-    const system = `You generate senior design project ideas.
-Return STRICT JSON ONLY. No markdown. No backticks. No extra commentary.`;
-
-    const user = `
-Generate ${count} senior design project ideas.
-
-USER PROMPT / CONSTRAINTS (use these heavily):
-${prompt}
-
-OUTPUT RULES:
-- Return ONLY JSON with this top-level shape:
-{
-  "projects": [
-    {
-      "title": "string",
-      "description": "string (compact, 2-4 sentences)",
-      "key_components": ["string", "..."],
-      "technologies": ["string", "..."],
-      "challenges": ["string", "..."],
-      "est_cost": "string (like $0-$100, $50-$200, $100-$300 etc.)",
-      "timeline": "string (like Months 1-2: ...; Months 3-4: ...)",
-      "market_appeal": "string (1-3 sentences)",
-      "unique_value": "string (1-3 sentences)"
-    }
-  ]
-}
-
-STYLE:
-- Compact + structured (like a rubric card).
-- Keep each list 3-6 bullets max.
-- Avoid “Project 1/2/3” labels inside fields.
-- If info is missing, make reasonable assumptions.
-`;
-
-    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    const resp = await fetch(OPENAI_URL, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model,
-        temperature: 0.7,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
+      body: JSON.stringify(payload),
     });
 
-    if (!resp.ok) {
-      const errText = await resp.text();
-      return {
-        statusCode: resp.status,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          error: {
-            message: `OpenAI error (${resp.status}).`,
-            details: errText,
-          },
-        }),
-      };
-    }
-
     const data = await resp.json();
-    const text = data?.choices?.[0]?.message?.content || "";
 
-    // Parse JSON strictly
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      // If the model returns something unexpected, still return the raw text for debugging
-      return {
-        statusCode: 200,
-        headers: corsHeaders,
-        body: JSON.stringify({
-          projects: [],
-          ideasText: text,
-          warning:
-            "Model did not return valid JSON. Frontend should log ideasText for debugging.",
-        }),
-      };
+    if (!resp.ok) {
+      const msg =
+        data?.error?.message ||
+        data?.message ||
+        `OpenAI API error (${resp.status})`;
+      return json(resp.status, { error: { message: msg, details: data } });
     }
 
-    // Minimal validation/cleanup
-    const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
-    const cleaned = projects.slice(0, count).map((p) => ({
-      title: String(p.title || "Untitled Project").trim(),
-      description: String(p.description || "").trim(),
-      key_components: Array.isArray(p.key_components) ? p.key_components.slice(0, 6) : [],
-      technologies: Array.isArray(p.technologies) ? p.technologies.slice(0, 6) : [],
-      challenges: Array.isArray(p.challenges) ? p.challenges.slice(0, 6) : [],
-      est_cost: String(p.est_cost || "Not specified").trim(),
-      timeline: String(p.timeline || "Not specified").trim(),
-      market_appeal: String(p.market_appeal || "").trim(),
-      unique_value: String(p.unique_value || "").trim(),
-    }));
+    const ideasText = extractResponseText(data);
+    if (!ideasText) {
+      return json(500, {
+        error: {
+          message:
+            "OpenAI returned an empty response. Try again, or reduce requested detail/idea count.",
+          details: data,
+        },
+      });
+    }
 
-    return {
-      statusCode: 200,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        projects: cleaned,
-      }),
-    };
-  } catch (e) {
-    return {
-      statusCode: 500,
-      headers: corsHeaders,
-      body: JSON.stringify({
-        error: { message: e?.message || "Server error" },
-      }),
-    };
+    return json(200, { ideasText, modelUsed: model });
+  } catch (err) {
+    return json(500, {
+      error: { message: err?.message || "Server error." },
+    });
   }
-}
+};
