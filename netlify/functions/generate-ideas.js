@@ -1,7 +1,9 @@
 // netlify/functions/generate-ideas.js
 
 const OPENAI_URL = "https://api.openai.com/v1/responses";
-const UPSTREAM_TIMEOUT_MS = 9000; // keep under Netlify timeout limits
+
+// Keep this under Netlify’s limit. (Free tier commonly ~10s)
+const UPSTREAM_TIMEOUT_MS = 9000;
 
 function json(statusCode, body) {
   return {
@@ -23,7 +25,9 @@ function extractResponseText(data) {
       for (const item of data.output) {
         const content = item?.content || [];
         for (const c of content) {
-          if (c?.type === "output_text" && typeof c?.text === "string") chunks.push(c.text);
+          if (c?.type === "output_text" && typeof c?.text === "string") {
+            chunks.push(c.text);
+          }
         }
       }
       return chunks.join("\n").trim();
@@ -33,14 +37,24 @@ function extractResponseText(data) {
   return "";
 }
 
+// Very small allow-list so random/old models don't break calls
+function normalizeModel(m) {
+  const allowed = new Set(["gpt-4.1-mini", "gpt-4o-mini", "gpt-4.1"]);
+  return allowed.has(m) ? m : "gpt-4.1-mini";
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod === "OPTIONS") return json(200, { ok: true });
-  if (event.httpMethod !== "POST") return json(405, { error: { message: "Method not allowed. Use POST." } });
+  if (event.httpMethod !== "POST") {
+    return json(405, { error: { message: "Method not allowed. Use POST." } });
+  }
 
   try {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      return json(500, { error: { message: "API key not configured. Set OPENAI_API_KEY in Netlify env vars." } });
+      return json(500, {
+        error: { message: "API key not configured. Set OPENAI_API_KEY in Netlify environment variables." },
+      });
     }
 
     let body;
@@ -50,50 +64,29 @@ exports.handler = async (event) => {
       return json(400, { error: { message: "Invalid JSON body." } });
     }
 
-    const model = body.model || "gpt-4.1-mini";
-    const count = Number(body.count || 3);
+    const model = normalizeModel(body.model);
     let prompt = String(body.prompt || "").trim();
     if (!prompt) return json(400, { error: { message: "Missing prompt." } });
 
+    // Keep prompt size sane
     if (prompt.length > 12000) prompt = prompt.slice(0, 12000);
 
-    // Force JSON output so your frontend can reliably read timeline/cost/etc.
-    const schemaHint = `
-Return ONLY valid JSON (no markdown, no backticks).
-Shape:
-{
-  "ideas": [
-    {
-      "title": "string",
-      "description": "string (compact, 2-4 sentences)",
-      "key_components": ["string", "..."],
-      "technologies": ["string", "..."],
-      "challenges": ["string", "..."],
-      "unique_value": "string (1-2 sentences)",
-      "est_cost": "string (example: $45-$210)",
-      "timeline": "string (example: Months 1-2 ...)",
-      "image_prompt": "string (a visual prompt, NO text in image)"
-    }
-  ]
-}
-Generate exactly ${count} ideas in the array.
-`;
+    // Force JSON-only output by instruction (works reliably with parsing below)
+    const system = [
+      "You are an expert senior design project advisor.",
+      "Return JSON ONLY. No markdown. No commentary.",
+      "Follow the exact schema requested by the user prompt.",
+      "Do NOT include trailing commas.",
+    ].join(" ");
 
     const payload = {
       model,
       input: [
-        {
-          role: "system",
-          content:
-            "You are a senior-design project advisor. Be concise. Follow the user's constraints. Output must be strictly valid JSON.",
-        },
-        {
-          role: "user",
-          content: [{ type: "input_text", text: prompt + "\n\n" + schemaHint }],
-        },
+        { role: "system", content: system },
+        { role: "user", content: [{ type: "input_text", text: prompt }] },
       ],
-      max_output_tokens: 1100, // enough for multiple compact ideas
-      temperature: 0.7,
+      temperature: 0.4,
+      max_output_tokens: 650, // enough for 2–3 ideas in compact JSON
     };
 
     const controller = new AbortController();
@@ -114,13 +107,17 @@ Generate exactly ${count} ideas in the array.
       clearTimeout(timeout);
     }
 
-    const text = await resp.text();
+    const raw = await resp.text();
+
     let data;
     try {
-      data = JSON.parse(text);
+      data = JSON.parse(raw);
     } catch {
       return json(502, {
-        error: { message: `Upstream returned non-JSON (status ${resp.status}).`, details: text.slice(0, 300) },
+        error: {
+          message: `Upstream returned non-JSON (status ${resp.status}).`,
+          details: raw.slice(0, 300),
+        },
       });
     }
 
@@ -130,18 +127,34 @@ Generate exactly ${count} ideas in the array.
     }
 
     const ideasText = extractResponseText(data);
-    if (!ideasText) return json(500, { error: { message: "OpenAI returned empty text.", details: data } });
-
-    // Try parse JSON so frontend can render reliably
-    let ideasJson = null;
-    try {
-      ideasJson = JSON.parse(ideasText);
-    } catch {
-      // if model ever violates format, still return the text so you can see it
-      ideasJson = null;
+    if (!ideasText) {
+      return json(500, { error: { message: "OpenAI returned empty text.", details: data } });
     }
 
-    return json(200, { ideasText, ideasJson, modelUsed: model });
+    // ✅ Parse the model output as JSON for the frontend
+    let ideasJson;
+    try {
+      ideasJson = JSON.parse(ideasText);
+    } catch (e) {
+      return json(500, {
+        error: {
+          message: "Model did not return valid JSON. Lower idea count/detail level and try again.",
+          details: ideasText.slice(0, 300),
+        },
+      });
+    }
+
+    // Basic schema check
+    if (!ideasJson || !Array.isArray(ideasJson.ideas)) {
+      return json(500, {
+        error: {
+          message: "JSON schema invalid: expected { ideas: [...] }",
+          details: ideasJson,
+        },
+      });
+    }
+
+    return json(200, { ideasJson, ideasText, modelUsed: model });
   } catch (err) {
     const msg =
       err?.name === "AbortError"
