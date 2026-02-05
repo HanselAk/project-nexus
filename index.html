@@ -1428,174 +1428,174 @@ displayResults(content, technologies, params);
             }
         });
 
-        function displayResults(content, technologies, params) {
-            const resultsDiv = document.getElementById('results');
-            
-            // Parse projects
-            const sections = content.split(/(?=Project \d+:|Idea \d+:|\d+\.\s+\*\*|###\s+Project)/i);
-            const projects = sections.filter(s => s.trim().length > 100);
-            
-            let html = '<div class="card"><h2>🎯 Generated Project Ideas</h2><div class="project-grid">';
-            
-            projects.forEach((project, index) => {
-                // Extract sections
-                const titleMatch = project.match(/\*\*Title[:\s]*\*\*[:\s]*(.+?)(?:\n|$)/i) || 
-                                  project.match(/\*\*(.+?)\*\*/);
-                const imagePromptMatch = project.match(/\*\*Image Prompt[:\s]*\*\*[:\s]*(.+?)(?=\*\*|$)/is);
-                const problemMatch = project.match(/\*\*(?:Problem|Description)[:\s]*\*\*[:\s]*(.+?)(?=\*\*|$)/is);
-                const featuresMatch = project.match(/\*\*Key (?:Features|Components)[:\s]*\*\*[:\s]*(.+?)(?=\*\*|$)/is);
-                const techMatch = project.match(/\*\*(?:Technology Stack|Technologies)[:\s]*\*\*[:\s]*(.+?)(?=\*\*|$)/is);
-                const challengesMatch = project.match(/\*\*Challenges[:\s]*\*\*[:\s]*(.+?)(?=\*\*|$)/is);
-                const uniqueMatch = project.match(/\*\*(?:Unique Value|Competitive Advantage|Market Appeal)[:\s]*\*\*[:\s]*(.+?)(?=\*\*|$)/is);
-                const costMatch = project.match(/\*\*(?:Est\.|Estimated)?\s*Cost[:\s]*\*\*[:\s]*(.+?)(?=\*\*|\n|$)/is);
-                const timelineMatch = project.match(/\*\*Timeline[:\s]*\*\*[:\s]*(.+?)(?=\*\*|\n|$)/is);
-                
-                const title = titleMatch ? titleMatch[1].replace(/[:#*]/g, '').trim() : `Untitled Project`;
-                const imagePrompt = imagePromptMatch ? imagePromptMatch[1].trim() : '';
-                
-                // Parse features into list
-                let featuresHtml = '';
-                if (featuresMatch) {
-                    const featuresText = featuresMatch[1].trim();
-                    const featuresList = featuresText.split(/\n/).filter(f => {
-                        const cleaned = f.replace(/^[-•*\s\d.]+/, '').trim();
-                        return cleaned.length > 10;
-                    });
-                    if (featuresList.length > 0) {
-                        featuresHtml = '<ul class="project-list">' + 
-                            featuresList.map(f => `<li>${f.replace(/^[-•*\s\d.]+/, '').trim()}</li>`).join('') + 
-                            '</ul>';
-                    } else {
-                        featuresHtml = `<p class="project-description">${featuresText.substring(0, 300)}...</p>`;
-                    }
-                }
-                
-                // Parse technologies into list
-                let techHtml = '';
-                if (techMatch) {
-                    const techText = techMatch[1].trim();
-                    const techList = techText.split(/\n/).filter(t => {
-                        const cleaned = t.replace(/^[-•*\s\d.]+/, '').trim();
-                        return cleaned.length > 2;
-                    });
-                    if (techList.length > 0) {
-                        techHtml = '<ul class="project-list">' + 
-                            techList.map(t => `<li>${t.replace(/^[-•*\s\d.]+/, '').trim()}</li>`).join('') + 
-                            '</ul>';
-                    } else {
-                        techHtml = `<p class="project-description">${techText.substring(0, 200)}...</p>`;
-                    }
-                }
-                
-                // Parse challenges into list
-                let challengesHtml = '';
-                if (challengesMatch) {
-                    const challengesText = challengesMatch[1].trim();
-                    const challengesList = challengesText.split(/\n/).filter(c => {
-                        const cleaned = c.replace(/^[-•*\s\d.]+/, '').trim();
-                        return cleaned.length > 10;
-                    });
-                    if (challengesList.length > 0) {
-                        challengesHtml = '<ul class="project-list">' + 
-                            challengesList.map(c => `<li>${c.replace(/^[-•*\s\d.]+/, '').trim()}</li>`).join('') + 
-                            '</ul>';
-                    } else {
-                        challengesHtml = `<p class="project-description">${challengesText.substring(0, 300)}...</p>`;
-                    }
-                }
-                
-                const cost = costMatch ? costMatch[1].trim() : 'Not specified';
-                const timeline = timelineMatch ? timelineMatch[1].trim() : 'Not specified';
-                
-                html += `
-                    <div class="project-card">
-                        <div class="project-header">
-                            <div class="project-number">${index + 1}</div>
-                            <h3 class="project-title">${title}</h3>
-                        </div>
-                        
-                        ${params.generateImages ? `
-                            <div class="project-image-container" id="img-container-${index}">
-                                <div class="image-loading">
-                                    <div class="image-loading-spinner"></div>
-                                    <div>Generating image...</div>
-                                </div>
-                            </div>
-                        ` : ''}
-                        
-                        <div class="project-content">
-                            ${problemMatch ? `
-                                <div class="project-section">
-                                    <h4>Description</h4>
-                                    <p class="project-description">${problemMatch[1].trim()}</p>
-                                </div>
-                            ` : ''}
-                            
-                            ${featuresHtml ? `
-                                <div class="project-section">
-                                    <h4>Key Components</h4>
-                                    ${featuresHtml}
-                                </div>
-                            ` : ''}
-                            
-                            ${techHtml ? `
-                                <div class="project-section">
-                                    <h4>Technologies</h4>
-                                    ${techHtml}
-                                </div>
-                            ` : ''}
-                            
-                            ${challengesHtml ? `
-                                <div class="project-section">
-                                    <h4>Challenges</h4>
-                                    ${challengesHtml}
-                                </div>
-                            ` : ''}
-                            
-                            ${uniqueMatch ? `
-                                <div class="project-section">
-                                    <h4>Unique Value</h4>
-                                    <p class="project-description">${uniqueMatch[1].trim()}</p>
-                                </div>
-                            ` : ''}
-                        </div>
-                        
-                        <div class="project-footer">
-                            <div class="footer-item">
-                                <div class="footer-label">💰 Est. Cost</div>
-                                <div class="footer-value">${cost}</div>
-                            </div>
-                            <div class="footer-item">
-                                <div class="footer-label">⏱️ Timeline</div>
-                                <div class="footer-value">${timeline}</div>
-                            </div>
-                        </div>
-                        
-                        ${technologies.length > 0 ? `
-                            <div class="project-tags">
-                                ${technologies.map(tech => `<span class="tag">${tech}</span>`).join('')}
-                            </div>
-                        ` : ''}
-                    </div>
-                `;
-                
-                // Store image prompt for generation
-                if (params.generateImages && imagePrompt) {
-                    setTimeout(() => generateProjectImage(index, imagePrompt, title), index * 1500);
-                }
-            });
-            
-            html += '</div></div>';
-            resultsDiv.innerHTML = html;
-            resultsDiv.classList.add('active');
-            // If user checked "Generate AI images", call backend image function for each project
+        function displayResults(content, technologies, params) {function displayResults(content, technologies, params) {
+  const resultsDiv = document.getElementById('results');
 
+  // Parse projects (splits on common “Idea/Project” boundaries)
+  const sections = content.split(/(?=Project \d+:|Idea \d+:|\*\*Title\*\*|###\s+Project)/i);
+  const projects = sections.filter(s => s.trim().length > 100);
+
+  let html = '<div class="card"><h2>🎯 Generated Project Ideas</h2><div class="project-grid">';
+  const imageQueue = [];
+
+  projects.forEach((project, index) => {
+    // Extract fields (matches your backend headings)
+    const titleMatch =
+      project.match(/\*\*Title\*\*[:\s]*(.+?)(?:\n|$)/i) ||
+      project.match(/\*\*(.+?)\*\*/);
+
+    const taglineMatch = project.match(/\*\*Tagline\*\*[:\s]*(.+?)(?:\n|$)/i);
+
+    const imagePromptMatch = project.match(/\*\*Image Prompt\*\*[:\s]*([\s\S]+?)(?=\*\*|$)/i);
+
+    const problemMatch = project.match(/\*\*Problem\*\*[:\s]*([\s\S]+?)(?=\*\*|$)/i);
+    const solutionMatch = project.match(/\*\*Solution\*\*[:\s]*([\s\S]+?)(?=\*\*|$)/i);
+
+    const featuresMatch = project.match(/\*\*Key Features\*\*[:\s]*([\s\S]+?)(?=\*\*|$)/i);
+    const techMatch = project.match(/\*\*Technology Stack\*\*[:\s]*([\s\S]+?)(?=\*\*|$)/i);
+
+    // Optional extras (if your prompt includes them)
+    const challengesMatch = project.match(/\*\*(?:Challenges & Risks|Challenges)\*\*[:\s]*([\s\S]+?)(?=\*\*|$)/i);
+    const advantageMatch = project.match(/\*\*(?:Competitive Advantage|Competitive Advantage|Competitive)\*\*[:\s]*([\s\S]+?)(?=\*\*|$)/i);
+
+    // Best-effort “cost/timeline” (your model may or may not output these)
+    const costMatch = project.match(/\*\*(?:Est\.?\s*Cost|Estimated Cost|Cost)\*\*[:\s]*(.+?)(?:\n|$)/i);
+    const timelineMatch = project.match(/\*\*Timeline\*\*[:\s]*(.+?)(?:\n|$)/i);
+
+    const title = titleMatch ? String(titleMatch[1]).replace(/[:#*]/g, '').trim() : `Project ${index + 1}`;
+    const tagline = taglineMatch ? taglineMatch[1].trim() : '';
+    const imagePrompt = imagePromptMatch ? imagePromptMatch[1].trim() : '';
+
+    // Turn “Key Features” into bullets if possible
+    let featuresHtml = '';
+    if (featuresMatch) {
+      const lines = featuresMatch[1]
+        .split('\n')
+        .map(x => x.replace(/^[-•*\s\d.]+/, '').trim())
+        .filter(x => x.length > 0);
+
+      featuresHtml = lines.length
+        ? `<ul class="project-list">${lines.map(li => `<li>${li}</li>`).join('')}</ul>`
+        : `<p class="project-description">${featuresMatch[1].trim()}</p>`;
+    }
+
+    // Turn “Technology Stack” into bullets if possible
+    let techHtml = '';
+    if (techMatch) {
+      const lines = techMatch[1]
+        .split('\n')
+        .map(x => x.replace(/^[-•*\s\d.]+/, '').trim())
+        .filter(x => x.length > 0);
+
+      techHtml = lines.length
+        ? `<ul class="project-list">${lines.map(li => `<li>${li}</li>`).join('')}</ul>`
+        : `<p class="project-description">${techMatch[1].trim()}</p>`;
+    }
+
+    const cost = costMatch ? costMatch[1].trim() : 'Not specified';
+    const timeline = timelineMatch ? timelineMatch[1].trim() : 'Not specified';
+
+    html += `
+      <div class="project-card">
+        <div class="project-header">
+          <div class="project-number">${index + 1}</div>
+          <h3 class="project-title">${title}</h3>
+        </div>
+
+        ${params && params.generateImages ? `
+          <div class="project-image-container" id="img-container-${index}">
+            <div class="image-loading">
+              <div class="image-loading-spinner"></div>
+              <div>Generating image...</div>
+            </div>
+          </div>
+        ` : ''}
+
+        ${tagline ? `<p style="color: var(--cyber-secondary); font-weight: 700; margin: 0 0 1rem 0;">${tagline}</p>` : ''}
+
+        <div class="project-content">
+          ${problemMatch ? `
+            <div class="project-section">
+              <h4>Problem</h4>
+              <p class="project-description">${problemMatch[1].trim()}</p>
+            </div>
+          ` : ''}
+
+          ${solutionMatch ? `
+            <div class="project-section">
+              <h4>Solution</h4>
+              <p class="project-description">${solutionMatch[1].trim()}</p>
+            </div>
+          ` : ''}
+
+          ${featuresHtml ? `
+            <div class="project-section">
+              <h4>Key Features</h4>
+              ${featuresHtml}
+            </div>
+          ` : ''}
+
+          ${techHtml ? `
+            <div class="project-section">
+              <h4>Technology Stack</h4>
+              ${techHtml}
+            </div>
+          ` : ''}
+
+          ${challengesMatch ? `
+            <div class="project-section">
+              <h4>Challenges</h4>
+              <p class="project-description">${challengesMatch[1].trim()}</p>
+            </div>
+          ` : ''}
+
+          ${advantageMatch ? `
+            <div class="project-section">
+              <h4>Competitive Advantage</h4>
+              <p class="project-description">${advantageMatch[1].trim()}</p>
+            </div>
+          ` : ''}
+        </div>
+
+        <div class="project-footer">
+          <div class="footer-item">
+            <div class="footer-label">💰 Est. Cost</div>
+            <div class="footer-value">${cost}</div>
+          </div>
+          <div class="footer-item">
+            <div class="footer-label">⏱️ Timeline</div>
+            <div class="footer-value">${timeline}</div>
+          </div>
+        </div>
+
+        ${technologies && technologies.length ? `
+          <div class="project-tags">
+            ${technologies.map(t => `<span class="tag">${t}</span>`).join('')}
+          </div>
+        ` : ''}
+      </div>
+    `;
+
+    // Queue image generation AFTER DOM render (avoids missing containers)
+    if (params && params.generateImages) {
+      const fallbackPrompt =
+        `Clean futuristic concept art for a senior design project titled "${title}". Neon cyberpunk dashboard aesthetic, high contrast, no text.`;
+      imageQueue.push({ index, title, prompt: imagePrompt || fallbackPrompt });
+    }
   });
-}
 
-            // Scroll to results
-            resultsDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
+  html += '</div></div>';
+  resultsDiv.innerHTML = html;
+  resultsDiv.classList.add('active');
+  resultsDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+  // Kick off image generation (staggered so you don't slam the function)
+  if (params && params.generateImages) {
+    imageQueue.forEach((job, i) => {
+      setTimeout(() => generateProjectImage(job.index, job.prompt, job.title), i * 1200);
+    });
+  }
+}
 
         async function generateProjectImage(index, imagePrompt, projectTitle) {
             const container = document.getElementById(`img-container-${index}`);
