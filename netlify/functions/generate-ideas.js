@@ -89,8 +89,8 @@ const payload = {
       content: [{ type: "input_text", text: prompt }],
     },
   ],
-  max_output_tokens: 250,
-  temperature: 0.7,
+  max_output_tokens: 500,
+  temperature: 0.8,
 };
   
    
