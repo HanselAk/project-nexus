@@ -3,11 +3,7 @@
 const IMG_URL = "https://api.openai.com/v1/images/generations";
 
 function getApiKey() {
-  return (
-    process.env.OPENAI_API_KEY ||
-    process.env.openai_api_key ||
-    ""
-  ).trim();
+  return (process.env.OPENAI_API_KEY || process.env.openai_api_key || "").trim();
 }
 
 function json(statusCode, obj) {
@@ -57,6 +53,8 @@ exports.handler = async (event) => {
     return json(400, { error: { message: "Missing prompt." } });
   }
 
+  const size = typeof body.size === "string" ? body.size : "1024x1024";
+
   try {
     const resp = await fetch(IMG_URL, {
       method: "POST",
@@ -67,15 +65,28 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         model: "gpt-image-1",
         prompt,
-        size: "1024x1024",
-        response_format: "b64_json",
+        size,
+        // NOTE: do NOT send response_format for gpt-image-1
       }),
     });
 
-    const data = await resp.json();
+    const text = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      return json(502, {
+        error: {
+          message: `Upstream returned non-JSON (status ${resp.status}).`,
+          details: text.slice(0, 300),
+        },
+      });
+    }
 
     if (!resp.ok) {
-      return json(resp.status, { error: { message: data?.error?.message || "Image API error", details: data } });
+      return json(resp.status, {
+        error: { message: data?.error?.message || "Image API error", details: data },
+      });
     }
 
     const b64 = data?.data?.[0]?.b64_json;
